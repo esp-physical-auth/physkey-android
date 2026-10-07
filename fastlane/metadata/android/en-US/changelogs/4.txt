@@ -1,0 +1,4 @@
+- Detect USB security keys automatically when signing in or creating passkeys
+- Show app name and subtitle in Credential Manager settings
+- Fix passkey creation in Chrome and Chromium-based browsers
+- Fix credential management on CTAP 2.1 final security keys

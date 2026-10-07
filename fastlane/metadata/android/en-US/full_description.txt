@@ -1,0 +1,11 @@
+Authnkey is a credential provider that lets you use FIDO2 security keys (like YubiKey, SoloKey, Nitrokey, or Token2) for passkey authentication on Android.
+
+Many security keys don't fully work on Android: no PIN entry, no passkeys, just basic tap-to-authenticate.
+
+Authnkey fixes that.
+
+Install it, enable it in your phone's settings, and your FIDO2 security key or smartcard gains full passkey support over NFC and USB, including PIN and fingerprint verification and stored passkeys.
+
+You can also manage your key right from the app: view and delete stored passkeys, and set or change its PIN.
+
+Requires Android 14+ and a FIDO2-compatible security key or smartcard.

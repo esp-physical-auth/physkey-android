@@ -1,0 +1,1685 @@
+package pl.lebihan.authnkey
+
+import android.animation.ObjectAnimator
+import android.Manifest
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.nfc.NfcAdapter
+import android.nfc.Tag
+import android.nfc.tech.IsoDep
+import android.os.Build
+import android.os.Bundle
+import android.provider.Settings
+import android.view.View
+import android.view.animation.AccelerateDecelerateInterpolator
+import android.widget.Button
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+
+class MainActivity : AppCompatActivity() {
+
+    private var nfcAdapter: NfcAdapter? = null
+    private lateinit var usbManager: UsbManager
+
+    private lateinit var statusText: TextView
+    private lateinit var connectionType: TextView
+    private lateinit var resultText: TextView
+    private lateinit var btnDeviceInfo: Button
+    private lateinit var providerStatusContainer: LinearLayout
+    private lateinit var providerStatusText: TextView
+    private lateinit var btnEnableProvider: Button
+    private lateinit var nfcHintContainer: LinearLayout
+    private lateinit var btnNfcSettings: MaterialButton
+    private lateinit var btnConnectEsp32: Button
+
+    private var currentTransport: FidoTransport? = null
+    private var pinProtocol: PinProtocol? = null
+    private var credentialManagement: CredentialManagement? = null
+    private lateinit var outputFormatter: OutputFormatter
+
+    // ESP32 BLE backend state
+    private var esp32Protocol: Esp32Protocol? = null
+    private val blePermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            if (grants.values.all { it }) {
+                connectToEsp32()
+            } else {
+                statusText.text = getString(R.string.esp32_ble_permission_denied)
+            }
+        }
+
+    // NFC reconnection state
+    private var pendingAction: (() -> Unit)? = null
+    private var awaitingNfcReconnect: Boolean = false
+    private var reconnectDialog: AlertDialog? = null
+
+    // Credentials dialog state
+    private var credentialsDialog: AlertDialog? = null
+    private var credentialsContent: CredentialsDialogContent? = null
+
+    // Credential listing progress overlay
+    private var credentialProgress: CredentialProgressDialog? = null
+
+    // On-device UV state for credential listing flow
+    private var credListDeviceSupportsUv: Boolean = false
+    private var credListDeviceHasPin: Boolean = false
+    private var biometricDialog: AlertDialog? = null
+
+    private var usbPermissionRequested = false
+    private val connectMutex = Mutex()
+
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
+
+    private val usbPermissionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action == ACTION_USB_PERMISSION) {
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+
+                if (granted && device != null) {
+                    connectToUsbDevice(device)
+                } else {
+                    statusText.text = getString(R.string.usb_permission_denied)
+                }
+            }
+        }
+    }
+
+    private val usbAttachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    usbPermissionRequested = false
+                    if (device == null || !UsbTransport.isFidoDevice(device)) return
+
+                    if (usbManager.hasPermission(device)) {
+                        connectToUsbDevice(device)
+                    } else {
+                        requestUsbPermission(device)
+                    }
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    val transport = currentTransport as? UsbTransport ?: return
+                    if (device?.deviceId == transport.deviceId) {
+                        handleDisconnect()
+                    }
+                }
+            }
+        }
+    }
+
+    // Fires when NFC is toggled anywhere, including the quick settings shade.
+    private val nfcStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != NfcAdapter.ACTION_ADAPTER_STATE_CHANGED) return
+            when (intent.getIntExtra(NfcAdapter.EXTRA_ADAPTER_STATE, NfcAdapter.STATE_OFF)) {
+                NfcAdapter.STATE_ON, NfcAdapter.STATE_OFF -> updateConnectionStatus()
+            }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
+        super.onCreate(savedInstanceState)
+
+        setContentView(R.layout.activity_main)
+
+        // Handle system bar insets
+        val rootView = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, windowInsets ->
+            val insets = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.updatePadding(
+                left = insets.left,
+                top = insets.top,
+                right = insets.right,
+                bottom = insets.bottom
+            )
+            WindowInsetsCompat.CONSUMED
+        }
+
+        statusText = findViewById(R.id.statusText)
+        connectionType = findViewById(R.id.connectionType)
+        resultText = findViewById(R.id.resultText)
+        btnDeviceInfo = findViewById(R.id.btnDeviceInfo)
+        btnConnectEsp32 = findViewById(R.id.btnConnectEsp32)
+        providerStatusContainer = findViewById(R.id.providerStatusContainer)
+        providerStatusText = findViewById(R.id.providerStatusText)
+        btnEnableProvider = findViewById(R.id.btnEnableProvider)
+        nfcHintContainer = findViewById(R.id.nfcHintContainer)
+        btnNfcSettings = findViewById(R.id.btnNfcSettings)
+
+        nfcAdapter = NfcAdapter.getDefaultAdapter(this)
+        usbManager = getSystemService(Context.USB_SERVICE) as UsbManager
+        outputFormatter = OutputFormatter(this)
+
+        // Register USB permission receiver
+        val filter = IntentFilter(ACTION_USB_PERMISSION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbPermissionReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbPermissionReceiver, filter)
+        }
+
+        btnDeviceInfo.setOnClickListener { getDeviceInfo() }
+        btnConnectEsp32.setOnClickListener { requestEsp32Connect() }
+        btnEnableProvider.setOnClickListener { openProviderSettings() }
+        btnNfcSettings.setOnClickListener { openNfcSettings() }
+
+        updateConnectionStatus()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try {
+            unregisterReceiver(usbPermissionReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
+        try {
+            unregisterReceiver(usbAttachReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
+        try {
+            unregisterReceiver(nfcStateReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
+        scope.cancel()
+    }
+
+    override fun onResume() {
+        super.onResume()
+
+        // Check credential provider status
+        checkProviderStatus()
+
+        // Refresh the waiting prompt: NFC may have been toggled while backgrounded
+        updateConnectionStatus()
+
+        // Catch NFC toggles that happen while we're in the foreground (e.g. from the
+        // quick settings shade, which does not pause us).
+        registerReceiver(
+            nfcStateReceiver,
+            IntentFilter(NfcAdapter.ACTION_ADAPTER_STATE_CHANGED)
+        )
+
+        // Enable NFC foreground dispatch
+        nfcAdapter?.let { adapter ->
+            val intent = Intent(this, javaClass).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val pendingIntent = PendingIntent.getActivity(
+                this, 0, intent,
+                PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            val filters = arrayOf(IntentFilter(NfcAdapter.ACTION_TECH_DISCOVERED))
+            val techLists = arrayOf(arrayOf(IsoDep::class.java.name))
+            adapter.enableForegroundDispatch(this, pendingIntent, filters, techLists)
+        }
+
+        // Register USB attach receiver
+        val usbAttachFilter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(usbAttachReceiver, usbAttachFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbAttachReceiver, usbAttachFilter)
+        }
+
+        // Auto-connect to already-plugged USB FIDO devices
+        if (currentTransport?.isConnected != true || currentTransport is UsbTransport) {
+            checkForUsbDevice()
+        }
+
+        // Check if started by USB device attachment
+        if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED) {
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+            }
+            device?.let { handleUsbDevice(it) }
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        nfcAdapter?.disableForegroundDispatch(this)
+        try {
+            unregisterReceiver(usbAttachReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
+        try {
+            unregisterReceiver(nfcStateReceiver)
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+
+        when (intent.action) {
+            NfcAdapter.ACTION_TECH_DISCOVERED -> {
+                val tag = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(NfcAdapter.EXTRA_TAG, Tag::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(NfcAdapter.EXTRA_TAG)
+                }
+                tag?.let { handleNfcTag(it) }
+            }
+            UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                }
+                device?.let { handleUsbDevice(it) }
+            }
+        }
+    }
+
+    private fun handleNfcTag(tag: Tag) {
+        scope.launch {
+            try {
+                // Close old transport (NFC tags can't be reused after moving away)
+                currentTransport?.close()
+                currentTransport = null
+
+                val transport = withContext(Dispatchers.IO) {
+                    NfcTransport.connect(tag)
+                }
+
+                currentTransport = transport
+                pinProtocol = PinProtocol(transport)
+                credentialManagement = null
+
+                updateConnectionStatus()
+
+                // Check if we were waiting for reconnection
+                if (awaitingNfcReconnect) {
+                    reconnectDialog?.dismiss()
+                    reconnectDialog = null
+                    awaitingNfcReconnect = false
+
+                    val action = pendingAction
+                    if (action != null) {
+                        action()
+                    } else {
+                        statusText.text = getString(R.string.security_key_detected)
+                        resultText.text = ""
+                    }
+                } else {
+                    statusText.text = getString(R.string.security_key_detected)
+                }
+
+            } catch (e: Exception) {
+                statusText.text = getString(R.string.nfc_error, e.toUserMessage(this@MainActivity))
+                updateConnectionStatus()
+            }
+        }
+    }
+
+    private fun handleUsbDevice(device: UsbDevice) {
+        if (!UsbTransport.isFidoDevice(device)) {
+            return
+        }
+
+        if (usbManager.hasPermission(device)) {
+            connectToUsbDevice(device)
+        } else {
+            requestUsbPermission(device)
+        }
+    }
+
+    /**
+     * Check for already-plugged USB FIDO devices and connect if found.
+     * Only connects if there's exactly one device and we're not already connected.
+     */
+    private fun checkForUsbDevice() {
+        // Verify the existing USB connection is still usable
+        val transport = currentTransport
+        if (transport is UsbTransport) {
+            try {
+                transport.reclaimConnection()
+                return // still good
+            } catch (e: AuthnkeyError.NotConnected) {
+                transport.close()
+                currentTransport = null
+                pinProtocol = null
+                credentialManagement = null
+                updateConnectionStatus()
+            }
+        }
+
+        val devices = usbManager.deviceList.values
+            .filter { UsbTransport.isFidoDevice(it) }
+
+        // Only auto-connect if exactly one FIDO device is found
+        if (devices.size == 1) {
+            val device = devices.first()
+            if (usbManager.hasPermission(device)) {
+                connectToUsbDevice(device)
+            } else if (!usbPermissionRequested) {
+                requestUsbPermission(device)
+            }
+        }
+    }
+
+    private fun requestUsbPermission(device: UsbDevice) {
+        usbPermissionRequested = true
+
+        val intent = Intent(ACTION_USB_PERMISSION).apply {
+            setPackage(packageName)
+        }
+        val permissionIntent = PendingIntent.getBroadcast(
+            this, 0,
+            intent,
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        usbManager.requestPermission(device, permissionIntent)
+    }
+
+    private fun connectToUsbDevice(device: UsbDevice) {
+        scope.launch {
+            if (!connectMutex.tryLock()) return@launch
+            try {
+                currentTransport?.close()
+                currentTransport = null
+                pinProtocol = null
+                credentialManagement = null
+
+                statusText.text = getString(R.string.connecting_usb)
+
+                val transport = withContext(Dispatchers.IO) {
+                    UsbTransport.connect(usbManager, device)
+                }
+
+                currentTransport = transport
+                pinProtocol = PinProtocol(transport)
+                credentialManagement = null
+
+                // Dismiss NFC reconnect dialog if open
+                if (awaitingNfcReconnect) {
+                    reconnectDialog?.dismiss()
+                    reconnectDialog = null
+                    awaitingNfcReconnect = false
+                    pendingAction = null
+                    resultText.text = ""
+                }
+
+                updateConnectionStatus()
+                statusText.text = getString(R.string.security_key_detected)
+
+            } catch (e: Exception) {
+                statusText.text = getString(R.string.usb_error, e.toUserMessage(this@MainActivity))
+                updateConnectionStatus()
+            } finally {
+                connectMutex.unlock()
+            }
+        }
+    }
+
+    private fun updateConnectionStatus() {
+        val transport = currentTransport
+        val connected = transport?.isConnected == true
+
+        connectionType.text = if (connected) {
+            when (transport?.transportType) {
+                TransportType.NFC -> getString(R.string.using_nfc)
+                TransportType.USB -> getString(R.string.using_usb)
+                TransportType.BLE -> getString(R.string.using_esp32_ble)
+                else -> ""
+            }
+        } else {
+            getString(R.string.not_connected)
+        }
+
+        btnDeviceInfo.isEnabled = connected
+
+
+        // Update status text if not connected and not waiting for reconnect
+        if (!connected && !awaitingNfcReconnect) {
+            statusText.text = connectKeyInstruction()
+        }
+
+        // Offer to turn NFC on, but only while there's nothing connected anyway
+        nfcHintContainer.visibility =
+            if (!connected && shouldOfferNfcSettings()) View.VISIBLE else View.GONE
+    }
+
+    private fun openNfcSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_NFC_SETTINGS))
+        } catch (e: Exception) {
+            // No NFC settings activity available
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // ESP32 BLE backend
+    // ------------------------------------------------------------------
+
+    /** 检查/请求 BLE 权限，然后连接 ESP32。 */
+    private fun requestEsp32Connect() {
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            needed += listOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT,
+            )
+        }
+        // 部分机型（尤其国产 ROM）BLE 扫描仍强制要求定位权限
+        needed += Manifest.permission.ACCESS_FINE_LOCATION
+
+        val missing = needed.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            blePermissionLauncher.launch(missing.toTypedArray())
+            return
+        }
+        connectToEsp32()
+    }
+
+    /** 扫描并连接 ESP32（BLE NUS），完成 CA 信任链校验后设为当前传输。 */
+    /**
+     * 扫描周边 BLE 设备，弹窗让用户选择后再连接（对齐 physkey-dashboard/passless 的“选择设备”体验）。
+     */
+    private fun connectToEsp32() {
+        android.util.Log.i("MainActivity", "connectToEsp32: 按钮触发")
+
+        // 蓝牙未开启：弹提示 + 一键跳转蓝牙设置（避免“点了没反应”）
+        val btAdapter = (getSystemService(Context.BLUETOOTH_SERVICE) as android.bluetooth.BluetoothManager).adapter
+        if (btAdapter == null || !btAdapter.isEnabled) {
+            android.util.Log.w("MainActivity", "connectToEsp32: 蓝牙未开启，弹提示")
+            MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.esp32_bluetooth_off_title))
+                .setMessage(getString(R.string.esp32_bluetooth_off_message))
+                .setPositiveButton(getString(R.string.esp32_bluetooth_off_go)) { _, _ ->
+                    try { startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) } catch (_: Exception) {}
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+            return
+        }
+
+        scope.launch {
+            if (!connectMutex.tryLock()) {
+                android.util.Log.w("MainActivity", "connectToEsp32: 连接互斥锁被占用，跳过（可能上一次连接未释放）")
+                return@launch
+            }
+            try {
+                android.util.Log.i("MainActivity", "connectToEsp32: 开始扫描 BLE 设备…")
+                statusText.text = getString(R.string.esp32_scanning)
+                resultText.text = ""
+                val hits = withContext(Dispatchers.IO) {
+                    Esp32Protocol.scanDevices(this@MainActivity)
+                }
+                android.util.Log.i("MainActivity", "connectToEsp32: 扫描到 ${hits.size} 个设备")
+                if (hits.isEmpty()) {
+                    statusText.text = getString(R.string.esp32_no_device_found)
+                    return@launch
+                }
+                showDevicePickerDialog(hits) { hit ->
+                    android.util.Log.i("MainActivity", "用户选择设备: ${hit.name} ${hit.address}")
+                    connectToEsp32Address(hit.address, hit.name)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "connectToEsp32 失败: ${e.message}", e)
+                statusText.text = getString(R.string.esp32_connect_failed, e.toUserMessage(this@MainActivity))
+                updateConnectionStatus()
+            } finally {
+                connectMutex.unlock()
+            }
+        }
+    }
+
+    /** 设备选择弹窗：列出扫描到的蓝牙设备，点选后连接。 */
+    private fun showDevicePickerDialog(
+        hits: List<Esp32Protocol.ScanHit>,
+        onPick: (Esp32Protocol.ScanHit) -> Unit,
+    ) {
+        val labels = hits.map {
+            val nm = if (it.name.isBlank()) getString(R.string.esp32_unknown_device) else it.name
+            "$nm\n${it.address}"
+        }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.esp32_pick_device_title))
+            .setItems(labels) { _, which -> onPick(hits[which]) }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    /** 连接到用户选定的设备地址。 */
+    private fun connectToEsp32Address(address: String, name: String) {
+        scope.launch {
+            if (!connectMutex.tryLock()) return@launch
+            try {
+                statusText.text = getString(R.string.esp32_connecting)
+                resultText.text = ""
+
+                val verified = withContext(Dispatchers.IO) {
+                    Esp32Protocol.connectVerified(this@MainActivity, address)
+                }
+                val link = verified.protocol
+                esp32Protocol = link
+                val transport = Esp32Transport.from(link)
+                currentTransport = transport
+                pinProtocol = PinProtocol(transport)
+
+                statusText.text = getString(R.string.security_key_detected)
+                updateConnectionStatus()
+
+                // 展示部署标识，让用户确认“这是我自己部署的设备”
+                showDeploymentConfirmDialog(verified.deploymentId) {
+                    scope.launch {
+                        val hasPass = withContext(Dispatchers.IO) { link.hasPass() }
+                        resultText.text = when (hasPass) {
+                            true -> getString(R.string.esp32_pass_required_hint)
+                            false -> getString(R.string.esp32_no_pass_hint)
+                            else -> getString(R.string.esp32_connected)
+                        }
+                    }
+                }
+            } catch (e: SecurityException) {
+                // CA 信任链校验失败：拒绝连接
+                currentTransport = null
+                statusText.text = getString(R.string.esp32_trust_failed)
+                resultText.text = e.message ?: getString(R.string.esp32_trust_failed)
+                updateConnectionStatus()
+            } catch (e: Exception) {
+                statusText.text = getString(R.string.esp32_connect_failed, e.toUserMessage(this@MainActivity))
+                updateConnectionStatus()
+            } finally {
+                connectMutex.unlock()
+            }
+        }
+    }
+
+    /**
+     * 弹窗展示设备证书里内嵌的部署标识，让用户确认“这是我自己部署的设备”。
+     * 用户确认后才继续（TOFU：首次信任）。未确认则断开。
+     */
+    private fun showDeploymentConfirmDialog(deploymentId: String, onConfirmed: () -> Unit) {
+        val shown = if (deploymentId.isBlank()) getString(R.string.esp32_deploy_id_none) else deploymentId
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.esp32_deploy_confirm_title))
+            .setMessage(getString(R.string.esp32_deploy_confirm_message, shown))
+            .setCancelable(false)
+            .setPositiveButton(getString(R.string.esp32_deploy_confirm_yes)) { _, _ ->
+                onConfirmed()
+            }
+            .setNegativeButton(getString(R.string.esp32_deploy_confirm_no)) { _, _ ->
+                handleDisconnect()
+                resultText.text = getString(R.string.esp32_deploy_rejected)
+            }
+            .show()
+    }
+
+    /** 解锁 ESP32（AUTHPASS），供后续敏感操作使用。 */
+    private fun unlockEsp32(password: String) {
+        val link = esp32Protocol ?: return
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) { link.unlock(password) }
+            resultText.text = if (ok) {
+                getString(R.string.esp32_unlocked)
+            } else {
+                getString(R.string.esp32_unlock_failed)
+            }
+        }
+    }
+
+    private fun isNfcDisconnected(): Boolean {
+        return currentTransport is NfcTransport && currentTransport?.isConnected == false
+    }
+
+    private fun showNfcReconnectDialog() {
+        awaitingNfcReconnect = true
+        statusText.text = getString(R.string.connection_lost)
+        resultText.text = getString(R.string.waiting_reconnection)
+
+        val dialogView = layoutInflater.inflate(R.layout.dialog_connection_lost, null)
+        val iconBackground = dialogView.findViewById<View>(R.id.iconBackground)
+
+        iconBackground.backgroundTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, R.color.warning_container)
+        )
+
+        val pulseAnimator = ObjectAnimator.ofFloat(iconBackground, View.ALPHA, 1f, 0.3f).apply {
+            duration = 750
+            repeatCount = ObjectAnimator.INFINITE
+            repeatMode = ObjectAnimator.REVERSE
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+
+        reconnectDialog = MaterialAlertDialogBuilder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .setNegativeButton(getString(R.string.cancel)) { _, _ ->
+                awaitingNfcReconnect = false
+                pendingAction = null
+                resultText.text = getString(R.string.operation_cancelled)
+                handleDisconnect()
+            }
+            .setOnDismissListener { pulseAnimator.cancel() }
+            .create()
+
+        reconnectDialog?.show()
+    }
+
+    private fun getDeviceInfo() {
+        pendingAction = { getDeviceInfo() }
+
+        scope.launch {
+            try {
+                val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+
+                resultText.text = getString(R.string.reading_device_info)
+
+                val response = withContext(Dispatchers.IO) {
+                    transport.sendCtapCommand(CTAP.buildCommand(CTAP.CMD_GET_INFO))
+                }
+
+                val error = CTAP.getResponseError(response)
+                if (error != null) {
+                    resultText.text = outputFormatter.formatDeviceInfoError(error.name)
+                    pendingAction = null
+                    return@launch
+                }
+
+                val deviceInfo = CTAP.parseGetInfoStructured(response)
+                deviceInfo.onSuccess {
+                    resultText.text = ""
+                    showDeviceInfoDialog(it)
+                }.onFailure {
+                    resultText.text = outputFormatter.formatDeviceInfoError(it.message ?: "Failed to parse response")
+                }
+                pendingAction = null
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    handleDisconnect()
+                }
+            }
+        }
+    }
+
+    private fun showDeviceInfoDialog(deviceInfo: DeviceInfo) {
+        val content = DeviceInfoDialogContent(this, deviceInfo)
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.device_info_dialog_title)
+            .setView(content.view)
+            .setNeutralButton(android.R.string.copy, null)
+            .setPositiveButton(R.string.close, null)
+            .create()
+
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener {
+                val clipboard = getSystemService(ClipboardManager::class.java)
+                val label = getString(R.string.device_info_dialog_title)
+                clipboard.setPrimaryClip(ClipData.newPlainText(label, deviceInfo.dump()))
+            }
+        }
+
+        dialog.show()
+    }
+
+    private fun listCredentials() {
+        pendingAction = { listCredentials() }
+
+        scope.launch {
+            try {
+                val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+
+                resultText.text = getString(R.string.checking_cred_mgmt)
+
+                val infoResponse = withContext(Dispatchers.IO) {
+                    transport.sendCtapCommand(CTAP.buildCommand(CTAP.CMD_GET_INFO))
+                }
+
+                val deviceInfo = CTAP.parseGetInfoStructured(infoResponse).getOrElse {
+                    resultText.text = getString(R.string.error_parse_device_info)
+                    pendingAction = null
+                    return@launch
+                }
+
+                if (!deviceInfo.supportsCredMgmt && !deviceInfo.supportsCredMgmtPreview) {
+                    resultText.text = outputFormatter.status(
+                        getString(R.string.credential_management_title),
+                        "✗ " + getString(R.string.credential_management_not_supported)
+                    )
+                    pendingAction = null
+                    return@launch
+                }
+
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+                val deviceHasPin = deviceInfo.clientPinSet
+                val deviceSupportsUv = deviceInfo.supportsBuiltInUv
+
+                credListDeviceSupportsUv = deviceSupportsUv
+                credListDeviceHasPin = deviceHasPin
+
+                pendingAction = null
+
+                when {
+                    // Device supports UV but no PIN set -> go straight to UV
+                    deviceSupportsUv && !deviceHasPin -> {
+                        authenticateWithUvAndListCredentials(deviceInfo.usePreviewCommand)
+                    }
+                    // Device supports both UV and PIN -> show PIN dialog with biometric option
+                    deviceSupportsUv && deviceHasPin -> {
+                        val retries = withContext(Dispatchers.IO) { protocol.getPinRetries() }.getOrElse { e ->
+                            if (e is java.io.IOException) throw e
+                            resultText.text = e.toUserMessage(this@MainActivity)
+                            return@launch
+                        }
+                        if (retries == 0) {
+                            // PIN blocked, but UV might still work
+                            authenticateWithUvAndListCredentials(deviceInfo.usePreviewCommand)
+                        } else {
+                            showPinDialogForCredentialsWithBiometric(retries, deviceInfo.usePreviewCommand)
+                        }
+                    }
+                    // PIN only, no built-in UV
+                    deviceHasPin -> {
+                        val retries = withContext(Dispatchers.IO) { protocol.getPinRetries() }.getOrElse { e ->
+                            if (e is java.io.IOException) throw e
+                            resultText.text = e.toUserMessage(this@MainActivity)
+                            return@launch
+                        }
+                        if (retries == 0) {
+                            resultText.text = getString(R.string.error_pin_blocked)
+                            return@launch
+                        }
+                        showPinDialogForCredentials(retries, deviceInfo.usePreviewCommand)
+                    }
+                    // Neither PIN nor UV available -> fail
+                    else -> {
+                        throw AuthnkeyError.UserVerificationRequiredNoPin()
+                    }
+                }
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    handleDisconnect()
+                }
+            }
+        }
+    }
+
+    private fun showPinDialogForCredentials(retries: Int, usePreviewCommand: Boolean) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_pin_entry, null)
+        val pinInputField = dialogView.findViewById<PinInputField>(R.id.pinInputField)
+
+        pinInputField.useNumericKeyboard = getKeyboardPreference()
+        pinInputField.onKeyboardModeChanged = { saveKeyboardPreference(it) }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.pin_required_title))
+            .setMessage(getString(R.string.pin_required_message, retries))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.ok), null)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+
+        dialog.setOnShowListener {
+            pinInputField.requestFocus()
+            dialog.window?.let { window ->
+                WindowCompat.getInsetsController(window, pinInputField).show(WindowInsetsCompat.Type.ime())
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                pinInputField.validateAndGetPin()?.let { pin ->
+                    dialog.dismiss()
+                    authenticateAndListCredentials(pin, usePreviewCommand)
+                }
+            }
+        }
+
+        dialog.show()
+        resultText.text = ""
+    }
+
+    private fun showPinDialogForCredentialsWithBiometric(
+        retries: Int,
+        usePreviewCommand: Boolean,
+        errorMessage: String? = null
+    ) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_pin_entry_with_biometric, null)
+        val pinInputField = dialogView.findViewById<PinInputField>(R.id.pinInputField)
+        val btnBiometric = dialogView.findViewById<MaterialButton>(R.id.btnBiometric)
+
+        pinInputField.useNumericKeyboard = getKeyboardPreference()
+        pinInputField.onKeyboardModeChanged = { saveKeyboardPreference(it) }
+
+        val message = buildString {
+            if (errorMessage != null) {
+                append(errorMessage)
+                append("\n\n")
+            }
+            append(getString(R.string.pin_required_message, retries))
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.pin_required_title))
+            .setMessage(message)
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.ok), null)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+
+        dialog.setOnShowListener {
+            pinInputField.requestFocus()
+            dialog.window?.let { window ->
+                WindowCompat.getInsetsController(window, pinInputField).show(WindowInsetsCompat.Type.ime())
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                pinInputField.validateAndGetPin()?.let { pin ->
+                    dialog.dismiss()
+                    authenticateAndListCredentials(pin, usePreviewCommand)
+                }
+            }
+        }
+
+        btnBiometric.setOnClickListener {
+            dialog.dismiss()
+            authenticateWithUvAndListCredentials(usePreviewCommand)
+        }
+
+        dialog.show()
+        resultText.text = ""
+    }
+
+    private fun authenticateAndListCredentials(pin: String, usePreviewCommand: Boolean) {
+        // Save for potential reconnection
+        pendingAction = { authenticateAndListCredentials(pin, usePreviewCommand) }
+
+        scope.launch {
+            try {
+                val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+
+                resultText.text = getString(R.string.authenticating)
+
+                val keyAgreement = withContext(Dispatchers.IO) {
+                    protocol.initialize()
+                }.getOrElse { e ->
+                    if (isNfcDisconnected()) {
+                        showNfcReconnectDialog()
+                    } else {
+                        resultText.text = getString(R.string.error_init_pin_protocol)
+                        pendingAction = null
+                    }
+                    return@launch
+                }
+
+                resultText.text = getString(R.string.verifying_pin)
+                val authToken = withContext(Dispatchers.IO) {
+                    if (usePreviewCommand) keyAgreement.requestPinToken(pin)
+                    else keyAgreement.requestPinToken(pin, PinProtocol.PERMISSION_CM)
+                }.getOrElse { e ->
+                    if (e is java.io.IOException) throw e
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    return@launch
+                }
+
+                enumerateAndShowCredentials(authToken, usePreviewCommand)
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    handleDisconnect()
+                }
+            }
+        }
+    }
+
+    private suspend fun enumerateAndShowCredentials(
+        authToken: PinProtocol.Authenticated,
+        usePreviewCommand: Boolean
+    ) {
+        val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+
+        val credMgmt = CredentialManagement(transport, authToken, usePreviewCommand)
+        credentialManagement = credMgmt
+
+        resultText.text = getString(R.string.getting_metadata)
+        val metadataResult = withContext(Dispatchers.IO) { credMgmt.getCredentialsMetadata() }
+
+        val metadata = metadataResult.getOrElse {
+            if (isNfcDisconnected()) {
+                showNfcReconnectDialog()
+            } else {
+                resultText.text = getString(R.string.error_metadata, it.toUserMessage(this@MainActivity))
+                pendingAction = null
+            }
+            return
+        }
+
+        if (metadata.existingResidentCredentialsCount == 0) {
+            resultText.text = outputFormatter.formatNoCredentials(metadata)
+            pendingAction = null
+            return
+        }
+
+        resultText.text = ""
+        showCredentialProgress(getString(R.string.enumerating_rps))
+
+        try {
+            val rpsResult = withContext(Dispatchers.IO) { credMgmt.enumerateRelyingParties() }
+
+            val relyingParties = rpsResult.getOrElse {
+                dismissCredentialProgress()
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = outputFormatter.formatEnumerateRpsError(metadata, it.toUserMessage(this@MainActivity))
+                    pendingAction = null
+                }
+                return
+            }
+
+            if (relyingParties.isEmpty()) {
+                dismissCredentialProgress()
+                resultText.text = outputFormatter.formatNoRelyingParties(metadata)
+                pendingAction = null
+                return
+            }
+
+            val rpsWithCredentials = mutableListOf<OutputFormatter.RelyingPartyWithCredentials>()
+
+            for ((index, rp) in relyingParties.withIndex()) {
+                credentialProgress?.update(
+                    getString(R.string.loading_credentials_for, rp.rpId ?: "RP"),
+                    getString(R.string.credential_progress_rp_count, index + 1, relyingParties.size)
+                )
+
+                val credsResult = withContext(Dispatchers.IO) {
+                    credMgmt.enumerateCredentials(rp.rpIdHash)
+                }
+
+                val credentials = credsResult.getOrElse {
+                    dismissCredentialProgress()
+                    if (isNfcDisconnected()) {
+                        showNfcReconnectDialog()
+                    } else {
+                        resultText.text = getString(
+                            R.string.error_enumerate_credentials,
+                            rp.rpId ?: rp.rpIdHash.toHex(),
+                            it.toUserMessage(this@MainActivity)
+                        )
+                        pendingAction = null
+                    }
+                    return
+                }
+
+                rpsWithCredentials.add(
+                    OutputFormatter.RelyingPartyWithCredentials(
+                        relyingParty = rp,
+                        credentials = credentials,
+                        error = null
+                    )
+                )
+            }
+
+            val credentialItems = withContext(Dispatchers.IO) {
+                val psl = PublicSuffixes.get(this@MainActivity)
+                rpsWithCredentials.flatMap { rpWithCreds ->
+                    rpWithCreds.credentials?.map { cred ->
+                        CredentialItem(
+                            rpId = rpWithCreds.relyingParty.rpId
+                                ?: rpWithCreds.relyingParty.rpIdHash.toHex(),
+                            credential = cred
+                        )
+                    } ?: emptyList()
+                }.sortedByRegistrableDomain(psl)
+            }
+
+            dismissCredentialProgress()
+            showCredentialsDialog(metadata, credentialItems)
+            resultText.text = ""
+            pendingAction = null
+        } finally {
+            dismissCredentialProgress()
+        }
+    }
+
+    private fun showCredentialProgress(initialStatus: String) {
+        credentialProgress?.dismiss()
+        credentialProgress = CredentialProgressDialog(
+            context = this,
+            initialStatus = initialStatus,
+            showNfcHint = currentTransport?.transportType == TransportType.NFC
+        ).also { it.show() }
+    }
+
+    private fun dismissCredentialProgress() {
+        credentialProgress?.dismiss()
+        credentialProgress = null
+    }
+
+    private fun showBiometricWaitingDialog() {
+        biometricDialog?.dismiss()
+
+        val dialogView = layoutInflater.inflate(R.layout.dialog_biometric_waiting, null)
+        val icon = dialogView.findViewById<ImageView>(R.id.fingerprintIcon)
+
+        val pulse = ObjectAnimator.ofFloat(icon, View.ALPHA, 1f, 0.3f).apply {
+            duration = 1000
+            repeatMode = ObjectAnimator.REVERSE
+            repeatCount = ObjectAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator()
+        }
+
+        biometricDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.btn_use_biometric))
+            .setView(dialogView)
+            .setNegativeButton(getString(R.string.cancel)) { _, _ ->
+                pendingAction = null
+            }
+            .setCancelable(false)
+            .create()
+
+        biometricDialog?.setOnShowListener { pulse.start() }
+        biometricDialog?.setOnDismissListener { pulse.cancel() }
+        biometricDialog?.show()
+    }
+
+    private fun dismissBiometricDialog() {
+        biometricDialog?.dismiss()
+        biometricDialog = null
+    }
+
+    private fun authenticateWithUvAndListCredentials(usePreviewCommand: Boolean) {
+        pendingAction = { authenticateWithUvAndListCredentials(usePreviewCommand) }
+
+        showBiometricWaitingDialog()
+
+        scope.launch {
+            try {
+                val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+
+                val keyAgreement = withContext(Dispatchers.IO) {
+                    protocol.initialize()
+                }.getOrElse { e ->
+                    dismissBiometricDialog()
+                    if (isNfcDisconnected()) {
+                        showNfcReconnectDialog()
+                    } else {
+                        resultText.text = getString(R.string.error_init_pin_protocol)
+                        pendingAction = null
+                    }
+                    return@launch
+                }
+
+                val authToken = withContext(Dispatchers.IO) {
+                    keyAgreement.requestUvToken(PinProtocol.PERMISSION_CM)
+                }.getOrElse { e ->
+                    dismissBiometricDialog()
+                    if (e is java.io.IOException) throw e
+                    if (e is CTAP.Exception) {
+                        when (e.error) {
+                            CTAP.Error.UV_INVALID -> {
+                                val uvRetries = withContext(Dispatchers.IO) {
+                                    protocol.getUvRetries()
+                                }.getOrDefault(0)
+
+                                if (uvRetries > 0 && credListDeviceHasPin) {
+                                    showPinDialogForCredentialsFallback(
+                                        usePreviewCommand,
+                                        getString(R.string.error_uv_invalid_retries, uvRetries),
+                                        showBiometric = true
+                                    )
+                                } else if (uvRetries > 0) {
+                                    resultText.text = getString(R.string.error_uv_invalid_retries, uvRetries)
+                                    pendingAction = null
+                                } else {
+                                    fallbackToPinAfterUvFailureForCredentials(usePreviewCommand)
+                                }
+                                return@launch
+                            }
+                            CTAP.Error.UV_BLOCKED -> {
+                                fallbackToPinAfterUvFailureForCredentials(usePreviewCommand)
+                                return@launch
+                            }
+                            CTAP.Error.OPERATION_DENIED -> {
+                                if (credListDeviceHasPin) {
+                                    showPinDialogForCredentialsFallback(
+                                        usePreviewCommand,
+                                        getString(R.string.error_operation_denied),
+                                        showBiometric = credListDeviceSupportsUv
+                                    )
+                                } else {
+                                    resultText.text = getString(R.string.error_operation_denied)
+                                    pendingAction = null
+                                }
+                                return@launch
+                            }
+                            CTAP.Error.INVALID_SUBCOMMAND,
+                            CTAP.Error.INVALID_COMMAND,
+                            CTAP.Error.INVALID_PARAMETER -> {
+                                credListDeviceSupportsUv = false
+                                fallbackToPinAfterUvFailureForCredentials(usePreviewCommand)
+                                return@launch
+                            }
+                            else -> { /* fall through to generic error handling */ }
+                        }
+                    }
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    return@launch
+                }
+
+                dismissBiometricDialog()
+                enumerateAndShowCredentials(authToken, usePreviewCommand)
+
+            } catch (e: Exception) {
+                dismissBiometricDialog()
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    handleDisconnect()
+                }
+            }
+        }
+    }
+
+    private fun showPinDialogForCredentialsFallback(
+        usePreviewCommand: Boolean,
+        errorMessage: String,
+        showBiometric: Boolean
+    ) {
+        scope.launch {
+            try {
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+                val retries = withContext(Dispatchers.IO) { protocol.getPinRetries() }.getOrDefault(8)
+
+                if (retries == 0 && !showBiometric) {
+                    resultText.text = getString(R.string.error_pin_blocked)
+                    pendingAction = null
+                    return@launch
+                }
+
+                if (showBiometric) {
+                    showPinDialogForCredentialsWithBiometric(retries, usePreviewCommand, errorMessage)
+                } else {
+                    showPinDialogForCredentials(retries, usePreviewCommand)
+                }
+            } catch (e: Exception) {
+                resultText.text = e.toUserMessage(this@MainActivity)
+                pendingAction = null
+            }
+        }
+    }
+
+    private suspend fun fallbackToPinAfterUvFailureForCredentials(usePreviewCommand: Boolean) {
+        if (credListDeviceHasPin) {
+            val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+            val retries = withContext(Dispatchers.IO) { protocol.getPinRetries() }.getOrDefault(8)
+
+            if (retries == 0) {
+                resultText.text = getString(R.string.error_pin_blocked)
+                pendingAction = null
+                return
+            }
+
+            // No biometric option since UV is blocked
+            showPinDialogForCredentials(retries, usePreviewCommand)
+            resultText.text = getString(R.string.error_uv_blocked)
+        } else {
+            resultText.text = getString(R.string.error_uv_blocked)
+            pendingAction = null
+        }
+    }
+
+    private fun showChangePinDialog() {
+        pendingAction = { showChangePinDialog() }
+
+        scope.launch {
+            try {
+                val transport = currentTransport ?: throw AuthnkeyError.NotConnected()
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+
+                resultText.text = getString(R.string.checking_pin_status)
+
+                // Get device info to check if PIN is set
+                val infoResponse = withContext(Dispatchers.IO) {
+                    transport.sendCtapCommand(CTAP.buildCommand(CTAP.CMD_GET_INFO))
+                }
+                val deviceInfo = CTAP.parseGetInfoStructured(infoResponse).getOrThrow()
+                val isPinSet = deviceInfo.clientPinSet
+                val minPinLength = deviceInfo.minPinLength ?: 4
+
+                val retries = withContext(Dispatchers.IO) { protocol.getPinRetries() }.getOrNull()
+
+                pendingAction = null
+
+                if (isPinSet) {
+                    showChangePinDialogInternal(minPinLength, retries)
+                } else {
+                    showSetPinDialogInternal(minPinLength)
+                }
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                    handleDisconnect()
+                }
+            }
+        }
+    }
+
+    private fun showSetPinDialogInternal(minPinLength: Int) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_pin_set, null)
+        val newPinField = dialogView.findViewById<PinInputField>(R.id.newPin)
+        val confirmPinField = dialogView.findViewById<PinInputField>(R.id.confirmPin)
+
+        val useNumeric = getKeyboardPreference()
+        listOf(newPinField, confirmPinField).forEach { field ->
+            field.useNumericKeyboard = useNumeric
+            field.minPinLength = minPinLength
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this@MainActivity)
+            .setTitle(getString(R.string.set_pin_title))
+            .setMessage(getString(R.string.no_pin_set_message))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.set), null)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+
+        dialog.setOnShowListener {
+            newPinField.requestFocus()
+            dialog.window?.let { window ->
+                WindowCompat.getInsetsController(window, newPinField).show(WindowInsetsCompat.Type.ime())
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val newPin = newPinField.pin ?: ""
+                val confirmPin = confirmPinField.pin ?: ""
+
+                confirmPinField.error = null
+
+                when {
+                    newPin != confirmPin -> {
+                        confirmPinField.error = getString(R.string.error_pins_dont_match)
+                    }
+                    !newPinField.validate() -> {
+                        // error already set by validate()
+                    }
+                    else -> {
+                        dialog.dismiss()
+                        setPin(newPin)
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+        resultText.text = ""
+    }
+
+    private fun showChangePinDialogInternal(minPinLength: Int, retries: Int?) {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_pin_change, null)
+        val currentPinField = dialogView.findViewById<PinInputField>(R.id.currentPin)
+        val newPinField = dialogView.findViewById<PinInputField>(R.id.newPin)
+        val confirmPinField = dialogView.findViewById<PinInputField>(R.id.confirmPin)
+
+        val useNumeric = getKeyboardPreference()
+        listOf(currentPinField, newPinField, confirmPinField).forEach { field ->
+            field.useNumericKeyboard = useNumeric
+        }
+        listOf(newPinField, confirmPinField).forEach { field ->
+            field.minPinLength = minPinLength
+        }
+
+        val message = if (retries != null) {
+            getString(R.string.pin_retries_status, retries)
+        } else {
+            getString(R.string.error_pin_status)
+        }
+
+        val dialog = MaterialAlertDialogBuilder(this@MainActivity)
+            .setTitle(getString(R.string.change_pin_title))
+            .setMessage(message)
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.change), null)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+
+        dialog.setOnShowListener {
+            currentPinField.requestFocus()
+            dialog.window?.let { window ->
+                WindowCompat.getInsetsController(window, currentPinField).show(WindowInsetsCompat.Type.ime())
+            }
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val currentPin = currentPinField.pin ?: ""
+                val newPin = newPinField.pin ?: ""
+                val confirmPin = confirmPinField.pin ?: ""
+
+                confirmPinField.error = null
+
+                when {
+                    newPin != confirmPin -> {
+                        confirmPinField.error = getString(R.string.error_pins_dont_match)
+                    }
+                    !newPinField.validate() -> {
+                        // error already set by validate()
+                    }
+                    else -> {
+                        dialog.dismiss()
+                        changePin(currentPin, newPin)
+                    }
+                }
+            }
+        }
+
+        dialog.show()
+        resultText.text = ""
+    }
+
+    private fun setPin(newPin: String) {
+        pendingAction = { setPin(newPin) }
+
+        scope.launch {
+            try {
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+
+                resultText.text = getString(R.string.initializing_pin_protocol)
+
+                val keyAgreement = withContext(Dispatchers.IO) {
+                    protocol.initialize()
+                }.getOrElse { e ->
+                    if (isNfcDisconnected()) {
+                        showNfcReconnectDialog()
+                    } else {
+                        resultText.text = getString(R.string.error_init_pin_protocol)
+                        pendingAction = null
+                    }
+                    return@launch
+                }
+
+                resultText.text = getString(R.string.setting_pin)
+
+                val result = withContext(Dispatchers.IO) {
+                    keyAgreement.setPin(newPin)
+                }
+
+                result.fold(
+                    onSuccess = {
+                        resultText.text = outputFormatter.formatPinSetSuccess()
+                        pendingAction = null
+                    },
+                    onFailure = { error ->
+                        if (isNfcDisconnected()) {
+                            showNfcReconnectDialog()
+                            return@launch
+                        }
+
+                        resultText.text = outputFormatter.formatPinSetError(error)
+                        pendingAction = null
+                    }
+                )
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                }
+            }
+        }
+    }
+
+    private fun changePin(currentPin: String, newPin: String) {
+        pendingAction = { changePin(currentPin, newPin) }
+
+        scope.launch {
+            try {
+                val protocol = pinProtocol ?: throw AuthnkeyError.PinProtocolNotInitialized()
+
+                resultText.text = getString(R.string.initializing_pin_protocol)
+
+                val keyAgreement = withContext(Dispatchers.IO) {
+                    protocol.initialize()
+                }.getOrElse { e ->
+                    if (isNfcDisconnected()) {
+                        showNfcReconnectDialog()
+                    } else {
+                        resultText.text = getString(R.string.error_init_pin_protocol)
+                        pendingAction = null
+                    }
+                    return@launch
+                }
+
+                resultText.text = getString(R.string.changing_pin)
+
+                val result = withContext(Dispatchers.IO) {
+                    keyAgreement.changePin(currentPin, newPin)
+                }
+
+                result.fold(
+                    onSuccess = {
+                        resultText.text = outputFormatter.formatPinChangeSuccess()
+                        pendingAction = null
+                    },
+                    onFailure = { error ->
+                        if (isNfcDisconnected()) {
+                            showNfcReconnectDialog()
+                            return@launch
+                        }
+
+                        resultText.text = outputFormatter.formatPinChangeError(error)
+                        pendingAction = null
+                    }
+                )
+
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = e.toUserMessage(this@MainActivity)
+                    pendingAction = null
+                }
+            }
+        }
+    }
+
+    private fun showCredentialsDialog(
+        metadata: CredentialManagement.CredentialMetadata,
+        credentials: List<CredentialItem>
+    ) {
+        credentialsDialog?.dismiss()
+
+        val content = CredentialsDialogContent(
+            context = this,
+            credentials = credentials,
+            initialRemaining = metadata.maxPossibleRemainingCredentials,
+            onDelete = ::confirmDeleteCredential
+        )
+        credentialsContent = content
+
+        credentialsDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.credentials_dialog_title)
+            .setView(content.view)
+            .setPositiveButton(R.string.close, null)
+            .setOnDismissListener {
+                credentialsDialog = null
+                credentialsContent = null
+            }
+            .create()
+        credentialsDialog?.show()
+    }
+
+    private fun confirmDeleteCredential(item: CredentialItem) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.credential_delete_confirm_title)
+            .setMessage(getString(R.string.credential_delete_confirm_message, item.rpId))
+            .setPositiveButton(R.string.delete) { _, _ -> deleteCredential(item) }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun deleteCredential(item: CredentialItem) {
+        scope.launch {
+            try {
+                val credMgmt = credentialManagement
+                    ?: throw AuthnkeyError.NotConnected()
+
+                resultText.text = getString(R.string.instruction_verifying)
+
+                val result = withContext(Dispatchers.IO) {
+                    credMgmt.deleteCredential(item.credential.credentialId)
+                }
+
+                result.fold(
+                    onSuccess = {
+                        credentialsContent?.notifyDeleted(item)
+                        resultText.text = getString(R.string.credential_deleted)
+                    },
+                    onFailure = { error ->
+                        if (isNfcDisconnected()) {
+                            credentialsDialog?.dismiss()
+                            showNfcReconnectDialog()
+                        } else {
+                            resultText.text = getString(R.string.credential_delete_error, error.toUserMessage(this@MainActivity))
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                if (isNfcDisconnected()) {
+                    credentialsDialog?.dismiss()
+                    showNfcReconnectDialog()
+                } else {
+                    resultText.text = getString(R.string.credential_delete_error, e.toUserMessage(this@MainActivity))
+                }
+            }
+        }
+    }
+
+    private fun handleDisconnect() {
+        currentTransport?.close()
+        currentTransport = null
+        pinProtocol = null
+        credentialManagement = null
+        updateConnectionStatus()
+    }
+
+    private fun checkProviderStatus() {
+        providerStatusContainer.visibility = View.VISIBLE
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            !packageManager.hasSystemFeature(PackageManager.FEATURE_CREDENTIALS)) {
+            providerStatusContainer.backgroundTintList = ColorStateList.valueOf(getColor(R.color.provider_not_supported_background))
+            providerStatusText.setTextColor(getColor(R.color.provider_not_supported_text))
+            providerStatusText.text = getString(R.string.provider_not_supported)
+            btnEnableProvider.visibility = View.GONE
+            return
+        }
+
+        try {
+            val credentialManager = getSystemService(android.credentials.CredentialManager::class.java)
+            val componentName = ComponentName(this, AuthnkeyCredentialService::class.java)
+            val isEnabled = credentialManager?.isEnabledCredentialProviderService(componentName) ?: false
+
+            if (isEnabled) {
+                providerStatusContainer.backgroundTintList = ColorStateList.valueOf(getColor(R.color.provider_enabled_background))
+                providerStatusText.setTextColor(getColor(R.color.provider_enabled_text))
+                providerStatusText.text = getString(R.string.provider_enabled)
+                btnEnableProvider.visibility = View.GONE
+            } else {
+                providerStatusContainer.backgroundTintList = ColorStateList.valueOf(getColor(R.color.provider_not_enabled_background))
+                providerStatusText.setTextColor(getColor(R.color.provider_not_enabled_text))
+                providerStatusText.text = getString(R.string.provider_not_enabled)
+                btnEnableProvider.visibility = View.VISIBLE
+            }
+        } catch (e: Exception) {
+            providerStatusContainer.visibility = View.GONE
+            resultText.text = e.message
+        }
+    }
+
+    private fun openProviderSettings() {
+        val intent = Intent(Settings.ACTION_CREDENTIAL_PROVIDER)
+            .setData(android.net.Uri.parse("package:$packageName"))
+        startActivity(intent)
+    }
+
+    private fun getKeyboardPreference(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(PREF_USE_NUMERIC_KEYBOARD, true)
+
+    private fun saveKeyboardPreference(numeric: Boolean) {
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit { putBoolean(PREF_USE_NUMERIC_KEYBOARD, numeric) }
+    }
+
+    companion object {
+        private const val ACTION_USB_PERMISSION = "pl.lebihan.authnkey.USB_PERMISSION"
+        private const val PREFS_NAME = "authnkey_prefs"
+        private const val PREF_USE_NUMERIC_KEYBOARD = "use_numeric_keyboard"
+        private const val TAG = "MainActivity"
+    }
+}

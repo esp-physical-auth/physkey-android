@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Authnkey</string>
+
+    <!-- Credential Provider Service -->
+    <string name="credential_provider_subtitle">Passkeys on hardware Security Keys</string>
+    <string name="credential_entry_title">Security Key</string>
+    <string name="credential_create_description">Create passkey on your security key for %1$s</string>
+    <string name="credential_get_description">Use your security key for %1$s</string>
+
+    <!-- Bottom Sheet -->
+    <string name="security_key">Security Key</string>
+    <string name="create_passkey">Create Passkey</string>
+    <string name="sign_in">Sign In</string>
+    <string name="cancel">Cancel</string>
+    <string name="close">Close</string>
+    <string name="yes">Yes</string>
+    <string name="no">No</string>
+
+    <!-- Instructions -->
+    <string name="instruction_connect_key">Hold your security key against the back of your phone, or plug it in via USB</string>
+    <string name="instruction_connect_key_nfc_only">Hold your security key against the back of your phone</string>
+    <string name="instruction_connect_key_usb_only">Plug your security key in via USB</string>
+    <string name="instruction_connect_key_esp32">Tap “Connect ESP32” to link your device over Bluetooth</string>
+    <string name="instruction_no_transport">No usable connection method</string>
+    <string name="instruction_touch_key">Touch your security key to confirm…</string>
+    <string name="instruction_signing_in">Signing in…</string>
+    <string name="instruction_creating">Creating passkey…</string>
+    <string name="instruction_enter_pin">Enter your security key PIN</string>
+    <string name="instruction_usb_permission_denied">USB permission denied. Try again or use NFC.</string>
+    <string name="instruction_usb_permission_denied_no_nfc">USB permission denied. Try again.</string>
+    <string name="instruction_key_connected">Security key connected</string>
+    <string name="instruction_connecting_usb">Connecting to USB device…</string>
+    <string name="instruction_connecting_esp32">Connecting to ESP32…</string>
+    <string name="instruction_esp32_verifying">Verifying ESP32 device certificate…</string>
+    <string name="instruction_authenticating">Authenticating…</string>
+    <string name="instruction_initializing">Initializing…</string>
+    <string name="instruction_verifying">Verifying…</string>
+    <string name="instruction_verifying_pin">Verifying PIN…</string>
+    <string name="instruction_tag_lost">Lost contact with the security key\n\nReposition and hold until completion</string>
+    <string name="instruction_waiting_biometric">Touch the fingerprint sensor on your security key…</string>
+
+    <!-- NFC hint -->
+    <string name="hint_nfc_off">NFC is off</string>
+    <string name="action_turn_on_nfc">Turn on</string>
+
+    <!-- PIN Dialog -->
+    <string name="pin_dialog_title">Security Key PIN</string>
+    <string name="pin_dialog_message">Enter your security key PIN</string>
+    <string name="pin_hint">Enter PIN</string>
+    <string name="pin_hint_current">Current PIN</string>
+    <string name="pin_hint_new">New PIN</string>
+    <string name="pin_hint_confirm">Confirm new PIN</string>
+    <string name="pin_continue">Continue</string>
+    <string name="pin_too_short">PIN must be at least %1$d characters</string>
+    <string name="pin_too_long_title">PIN Too Long</string>
+    <string name="pin_too_long_message">PIN exceeds maximum allowed length</string>
+    <string name="pin_retries_remaining">Enter PIN (%1$d retries remaining)</string>
+    <string name="pin_incorrect_retries">Incorrect PIN. %1$d retries remaining</string>
+
+    <!-- Biometric / On-device UV -->
+    <string name="btn_use_biometric">Use fingerprint</string>
+    <string name="btn_connect_esp32_provider">🔐 Connect ESP32 (BLE)</string>
+    <string name="esp32_unlock_title">Unlock ESP32</string>
+    <string name="esp32_unlock_message">Enter the device password to unlock (needed to sign).</string>
+    <string name="esp32_unlock_hint">Device password</string>
+    <string name="error_uv_blocked">Biometric verification blocked. Use PIN instead.</string>
+    <string name="error_uv_failed">Biometric verification failed</string>
+    <string name="error_uv_invalid_retries">Fingerprint not recognized. %1$d retries remaining</string>
+
+    <!-- Errors -->
+    <string name="error_format">%1$s\n\nTry again or cancel</string>
+    <string name="error_retry_format">%1$s\n\nTry again</string>
+    <string name="error_user_cancelled">User cancelled</string>
+    <string name="error_no_request">No valid request found</string>
+    <string name="error_generic">Error: %1$s</string>
+    <string name="error_generic_with_trace">Error: %1$s\n\n%2$s</string>
+    <string name="error_metadata">Error getting metadata: %1$s</string>
+    <string name="error_enumerate_credentials">Failed to load credentials for %1$s: %2$s</string>
+    <string name="error_pins_dont_match">New PINs don\'t match</string>
+    <string name="error_uv_required_no_pin">Verification required but no PIN is set on your security key</string>
+    <string name="error_pin_not_supported_for_operation">Verification required but PIN cannot be used for this operation</string>
+
+    <!-- User-friendly error messages (used by ErrorMapping) -->
+    <string name="error_tag_lost">Lost contact with the security key</string>
+    <string name="error_not_supported_tag">This NFC tag is not a security key</string>
+    <string name="error_not_security_key">Security key not recognized</string>
+    <string name="error_connection_failed">Could not connect to the security key</string>
+    <string name="error_not_connected">No security key connected</string>
+    <string name="error_key_disconnected">The security key disconnected</string>
+    <string name="error_communication_failed">Could not communicate with the security key</string>
+    <string name="error_no_credentials">No passkeys found on this security key</string>
+    <string name="error_pin_incorrect">Incorrect PIN</string>
+    <string name="error_pin_blocked">PIN is blocked</string>
+    <string name="error_pin_not_set">No PIN configured on this security key</string>
+    <string name="error_pin_auth_invalid">PIN authentication failed</string>
+    <string name="error_pin_auth_blocked">Too many failed PIN attempts</string>
+    <string name="error_credential_excluded">This passkey already exists</string>
+    <string name="error_operation_denied">Operation denied by security key</string>
+    <string name="error_operation_cancelled">Operation cancelled</string>
+    <string name="error_user_action_timeout">Touch was not detected in time</string>
+    <string name="error_timeout">Operation timed out</string>
+    <string name="error_key_store_full">Security key storage is full</string>
+    <string name="error_unsupported_algorithm">Unsupported security algorithm</string>
+    <string name="error_ctap_unknown">Security key error: %1$s</string>
+    <string name="error_unknown">An unexpected error occurred</string>
+
+    <!-- Content descriptions -->
+    <string name="security_key_icon_desc">Security Key</string>
+    <string name="drag_handle_desc">Drag handle</string>
+    <string name="toggle_keyboard_type">Toggle keyboard type</string>
+
+    <!-- MainActivity (Debug) -->
+    <string name="usb_permission_denied">USB permission denied</string>
+    <string name="security_key_detected">Security key detected</string>
+    <string name="nfc_error">NFC Error: %1$s</string>
+    <string name="usb_error">USB Error: %1$s</string>
+    <string name="ok">OK</string>
+    <string name="connecting_usb">Connecting to USB device…</string>
+    <string name="using_nfc">Using NFC</string>
+    <string name="using_usb">Using USB</string>
+    <string name="using_esp32_ble">Using ESP32 (BLE)</string>
+    <string name="btn_connect_esp32">🔐 Connect ESP32 (BLE)</string>
+    <string name="esp32_connecting">Scanning for ESP32 (ATRI)…</string>
+    <string name="esp32_scanning">Scanning for Bluetooth devices…</string>
+    <string name="esp32_bluetooth_off_title">Bluetooth is off</string>
+    <string name="esp32_bluetooth_off_message">Please turn on Bluetooth to connect to the ESP32 device.</string>
+    <string name="esp32_bluetooth_off_go">Turn on Bluetooth</string>
+    <string name="esp32_unknown_device">Unknown device</string>
+    <string name="esp32_pick_device_title">Select a Bluetooth device</string>
+    <string name="esp32_no_device_found">No matching BLE device found</string>
+    <string name="esp32_connected">ESP32 connected (BLE)</string>
+    <string name="esp32_connect_failed">ESP32 connect failed: %1$s</string>
+    <string name="esp32_trust_failed">Device verification failed — refused to connect (possible MITM)</string>
+    <string name="esp32_ble_permission_denied">Bluetooth permission denied</string>
+    <string name="esp32_pass_required_hint">ESP32 connected. A password is set — unlock before using passkeys.</string>
+    <string name="esp32_no_pass_hint">ESP32 connected. No password set yet — set one to protect your keys.</string>
+    <string name="esp32_unlocked">ESP32 unlocked</string>
+    <string name="esp32_unlock_failed">Wrong password — ESP32 unlock failed</string>
+    <string name="esp32_deploy_confirm_title">Confirm this device</string>
+    <string name="esp32_deploy_confirm_message">Device verified by CA.\n\nDeployment ID (embedded in certificate):\n\n%1$s\n\nIs this a device you deployed yourself?</string>
+    <string name="esp32_deploy_confirm_yes">Yes, it\'s mine</string>
+    <string name="esp32_deploy_confirm_no">No, disconnect</string>
+    <string name="esp32_deploy_id_none">(none — legacy certificate)</string>
+    <string name="esp32_deploy_rejected">Refused: deployment not confirmed by user</string>
+    <string name="not_connected">Not connected</string>
+    <string name="waiting_for_key">Hold your security key against the back of your phone, or plug it in via USB</string>
+    <string name="connection_lost">Connection lost</string>
+    <string name="waiting_reconnection">Waiting for reconnection…</string>
+    <string name="connection_lost_title">Connection Lost</string>
+    <string name="connection_lost_message">Hold your security key against the back of your phone to continue.</string>
+    <string name="operation_cancelled">Operation cancelled</string>
+    <string name="reading_device_info">Reading device info…</string>
+    <string name="checking_cred_mgmt">Checking credential management support…</string>
+    <string name="error_parse_device_info">Could not parse device info</string>
+    <string name="error_pin_status">Could not get PIN status</string>
+    <string name="pin_required_title">PIN Required</string>
+    <string name="pin_required_message">Enter your PIN to list credentials.\n\nRetries remaining: %1$d</string>
+    <string name="error_pin_min_length">PIN must be at least 4 characters</string>
+    <string name="authenticating">Authenticating…</string>
+    <string name="error_init_pin_protocol">Could not establish secure connection</string>
+    <string name="verifying_pin">Verifying PIN…</string>
+    <string name="getting_metadata">Getting credential metadata…</string>
+    <string name="enumerating_rps">Enumerating relying parties…</string>
+    <string name="loading_credentials_for">Loading credentials for %1$s…</string>
+    <string name="credential_progress_title">Reading Credentials</string>
+    <string name="credential_progress_rp_count">Site %1$d of %2$d</string>
+    <string name="credential_progress_hold_key">Keep your security key against the back of your phone.</string>
+    <string name="checking_pin_status">Checking PIN status…</string>
+    <string name="pin_retries_status">PIN retries remaining: %1$d</string>
+    <string name="change_pin_title">Change PIN</string>
+    <string name="set_pin_title">Set PIN</string>
+    <string name="set">Set</string>
+    <string name="setting_pin">Setting PIN…</string>
+    <string name="no_pin_set_message">No PIN is set on this authenticator</string>
+    <string name="change">Change</string>
+    <string name="initializing_pin_protocol">Initializing PIN protocol…</string>
+    <string name="changing_pin">Changing PIN…</string>
+    
+    <!-- PIN Change Status Messages -->
+    <string name="pin_change_success_title">PIN Changed Successfully</string>
+    <string name="pin_change_success_message">Your authenticator PIN has been changed.\nPlease use the new PIN for future operations.</string>
+    
+    <string name="pin_invalid_title">Invalid PIN</string>
+    <string name="pin_invalid_message">The current PIN you entered is incorrect.\n\nPlease verify your current PIN and try again.</string>
+    
+    <string name="pin_blocked_title">PIN Blocked</string>
+    <string name="pin_blocked_message">Your authenticator PIN is blocked due to too many incorrect attempts.\n\nYou will need to reset your authenticator.</string>
+    
+    <string name="pin_policy_violation_title">PIN Policy Violation</string>
+    <string name="pin_policy_violation_message">The new PIN does not meet the authenticator\'s requirements.\n\nPINs must be at least 4 characters (or more, depending on the authenticator) and at most 63 bytes.</string>
+    
+    <string name="pin_not_set_title">No PIN Set</string>
+    <string name="pin_not_set_message">Your authenticator does not have a PIN set.\n\nUse "Set PIN" instead of "Change PIN".</string>
+
+    <string name="pin_set_success_title">PIN Set Successfully</string>
+    <string name="pin_set_success_message">Your authenticator PIN has been set.\nPlease use this PIN for future operations.</string>
+
+    <string name="pin_already_set_title">PIN Already Set</string>
+    <string name="pin_already_set_message">A PIN is already configured on this authenticator.</string>
+
+    <string name="pin_set_failed_title">PIN Set Failed</string>
+    <string name="pin_set_failed_message">Error: %1$s\n\nPlease try again or consult your authenticator\'s documentation.</string>
+    
+    <string name="pin_change_failed_title">PIN Change Failed</string>
+    <string name="pin_change_failed_message">Error: %1$s\n\nPlease try again or consult your authenticator\'s documentation.</string>
+    
+    <!-- Credential Management -->
+    <string name="credential_management_title">Credential Management</string>
+    <string name="credential_management_not_supported">This authenticator does not support credential management.</string>
+    <string name="credential_stored_count">Stored credentials: %1$d</string>
+    <string name="credential_remaining_slots">Remaining slots: %1$d</string>
+    <string name="credential_no_credentials">No credentials stored on this device.</string>
+    <string name="credential_no_rps">No relying parties found.</string>
+    <string name="credential_found_rps">Found %1$d relying party(ies):</string>
+    <string name="credential_rp_name">Name: %1$s</string>
+    <string name="credential_rp_header">RP %1$d: %2$s</string>
+    <string name="credential_number">Credential %1$d:</string>
+    <string name="credential_username">Username: %1$s</string>
+    <string name="credential_display_name">Display Name: %1$s</string>
+    <string name="credential_user_id">User ID: %1$s</string>
+    <string name="credential_id">Credential ID: %1$s...</string>
+    <string name="credential_protection">Protection: %1$s</string>
+    <string name="credential_error_enumerate_rps">Error enumerating RPs: %1$s</string>
+    <string name="credential_error_loading">Error: %1$s</string>
+    
+    <!-- Device Info -->
+    <string name="device_info_error">Error: %1$s</string>
+
+    <!-- Device Info Dialog Sections -->
+    <string name="device_info_section_versions">Versions</string>
+    <string name="device_info_section_extensions">Extensions</string>
+    <string name="device_info_section_aaguid">AAGUID</string>
+    <string name="device_info_section_options">Options</string>
+    <string name="device_info_section_interfaces">Supported Interfaces</string>
+    <string name="device_info_section_algorithms">Supported Algorithms</string>
+    <string name="device_info_section_limits">Limits</string>
+    <string name="device_info_section_uv_modality">Supported User Verification Methods</string>
+    <string name="device_info_dialog_title">Device Status</string>
+
+    <!-- Device Info Option Names -->
+    <string name="device_info_option_rk">Resident Keys</string>
+    <string name="device_info_option_up">User Presence</string>
+    <string name="device_info_option_uv">User Verification</string>
+    <string name="device_info_option_plat">Platform Authenticator</string>
+    <string name="device_info_option_clientPin">Client PIN</string>
+    <string name="device_info_option_credMgmt">Credential Management</string>
+    <string name="device_info_option_credentialMgmtPreview">Credential Management (Preview)</string>
+    <string name="device_info_option_largeBlobs">Large Blobs</string>
+    <string name="device_info_option_pinUvAuthToken">PIN/User Verification Auth Token</string>
+    <string name="device_info_option_authnrCfg">Authenticator Config</string>
+    <string name="device_info_option_uvAcfg">Authenticator Configuration with User Verification</string>
+    <string name="device_info_option_setMinPINLength">Set Minimum PIN Length</string>
+    <string name="device_info_option_makeCredUvNotRqd">Make Credential Without Requiring User Verification</string>
+    <string name="device_info_option_alwaysUv">Always Require User Verification</string>
+    <string name="device_info_option_ep">Enterprise Attestation</string>
+    <string name="device_info_option_bioEnroll">Biometric Enrollment</string>
+    <string name="device_info_option_uvBioEnroll">Biometric Enrollment with User Verification</string>
+    <string name="device_info_option_userVerificationMgmtPreview">User Verification Management (Preview)</string>
+    <string name="device_info_option_noMcGaPermissionsWithClientPin">Client PIN Does Not Grant Make Credential/Get Assertion Permissions</string>
+
+    <!-- Device Info Limit Labels -->
+    <string name="device_info_limit_max_msg_size">Max Message Size</string>
+    <string name="device_info_limit_max_creds_in_list">Max Credentials in List</string>
+    <string name="device_info_limit_max_cred_id_length">Max Credential ID Length</string>
+    <string name="device_info_limit_min_pin_length">Min PIN Length</string>
+    <string name="device_info_limit_pin_protocols">PIN/UV Auth Protocols</string>
+    <string name="device_info_limit_firmware">Firmware Version</string>
+    
+    <string name="choose_account">Choose an account</string>
+    <string name="unknown_account">Unknown account</string>
+    
+    <string name="provider_enabled">✓ Passkey provider enabled</string>
+    <string name="provider_not_enabled">Passkey provider not enabled</string>
+    <string name="provider_not_supported">Credential Manager is not supported on this device</string>
+    <string name="btn_enable">Enable</string>
+    
+    <!-- Main Screen Buttons -->
+    <string name="btn_show_device_status">Show Device Status</string>
+    <string name="btn_list_credentials">List Saved Credentials</string>
+    <string name="btn_change_pin">Change PIN</string>
+    
+    <!-- Credentials Dialog -->
+    <string name="credentials_dialog_title">Stored Credentials</string>
+    <string name="credentials_stats">%1$d credentials • %2$d slots remaining</string>
+    <string name="credential_detail_display_name">Display name</string>
+    <string name="credential_detail_username">Username</string>
+    <string name="credential_detail_user_id">User ID</string>
+    <string name="credential_detail_credential_id">Credential ID</string>
+    <string name="credential_detail_protection">Protection</string>
+    <string name="credential_delete">Delete credential</string>
+    <string name="credential_delete_confirm_title">Delete credential?</string>
+    <string name="credential_delete_confirm_message">This will permanently delete the passkey for %1$s. You won\'t be able to sign in to this site with this security key anymore.</string>
+    <string name="credential_deleted">Credential deleted</string>
+    <string name="credential_delete_error">Failed to delete: %1$s</string>
+    <string name="delete">Delete</string>
+</resources>

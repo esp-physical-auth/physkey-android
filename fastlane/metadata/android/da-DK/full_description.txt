@@ -1,0 +1,11 @@
+Authnkey er en legitimationsudbyder, der giver dig mulighed for at bruge FIDO2-sikkerhedsnøgler (som f.eks. YubiKey, SoloKey, Nitrokey eller Token2) til godkendelse med adgangsnøgler på Android.
+
+Mange sikkerhedsnøgler fungerer ikke fuldt ud på Android: ingen PIN-indtastning, ingen adgangsnøgler, kun grundlæggende godkendelse ved at trykke på enheden.
+
+Authnkey løser dette problem.
+
+Installer den, aktiver den i telefonens indstillinger og din FIDO2-sikkerhedsnøgle eller dit smartkort får fuld understøttelse af adgangskoder via NFC og USB, herunder PIN- og fingeraftryksverifikation samt gemte adgangskoder.
+
+Du kan også administrere din nøgle direkte fra appen: se og slet gemte adgangskoder, og indstil eller ændr dens PIN-kode.
+
+Kræver Android 14+ og en FIDO2-kompatibel sikkerhedsnøgle eller et smartkort.

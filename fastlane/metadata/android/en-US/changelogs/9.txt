@@ -1,0 +1,2 @@
+- Add support for on-device user verification on CTAP 2.0 security keys
+- Prevent some USB security keys from suppressing the on-screen keyboard

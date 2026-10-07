@@ -1,0 +1,11 @@
+Authnkey to dostawca poświadczeń, który pozwala używać kluczy bezpieczeństwa FIDO2 (takich jak YubiKey, SoloKey, Nitrokey czy Token2) do uwierzytelniania kluczami dostępu na Androidzie.
+
+Wiele kluczy bezpieczeństwa nie działa w pełni na Androidzie: brak obsługi kodu PIN i kluczy dostępu, tylko podstawowe uwierzytelnianie przez dotknięcie.
+
+Authnkey rozwiązuje ten problem.
+
+Zainstaluj aplikację, włącz ją w ustawieniach telefonu, a Twój klucz bezpieczeństwa lub karta inteligentna FIDO2 zyska pełną obsługę kluczy dostępu przez NFC i USB, w tym weryfikację kodem PIN lub odciskiem palca oraz przechowywane klucze dostępu.
+
+Możesz też zarządzać kluczem bezpośrednio z aplikacji: przeglądać i usuwać zapisane klucze dostępu, a także ustawić lub zmienić kod PIN.
+
+Wymaga Androida 14 lub nowszego oraz klucza bezpieczeństwa lub karty inteligentnej z obsługą FIDO2.

@@ -1,0 +1,11 @@
+Az Authnkey egy hitelesítési szolgáltatás, mellyel lehetővé válik a FIDO2 szabványra épülő biztonsági kulcsok (például YubiKey, SoloKey, Nitrokey, vagy Token2) használata jelszó nélküli (passkey) azonosításhoz Androidon.
+
+Számos biztonsági kulcs nem használható teljes körűen Androidon: nincs PIN-kód megadása, nincsenek passkey-k, csak az alapvető érintéses hitelesítés működik.
+
+Az Authnkey ezt megoldja.
+
+Telepítse az alkalmazást, engedélyezze a telefon beállításaiban, és FIDO2 biztonsági kulcsa vagy intelligens kártyája teljes körű passkey-támogatást kap NFC-n és USB-n keresztül, beleértve a PIN-kódos és ujjlenyomatos ellenőrzést, valamint a tárolt passkey-k használatát.
+
+A kulcsot közvetlenül az alkalmazásból is kezelheti: megtekintheti és törölheti a tárolt passkey-ket, valamint beállíthatja vagy módosíthatja a PIN-kódját..
+
+Android 14+ és FIDO2-kompatibilis biztonsági kulcs vagy intelligens kártya szükséges.

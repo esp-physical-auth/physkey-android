@@ -1,0 +1,6 @@
+Initial release.
+
+- Passkey creation and authentication over NFC and USB
+- PIN verification (CTAP2 clientPin)
+- Discoverable credentials support
+- Works without Google Play Services
