@@ -10,8 +10,6 @@
 
 ![Kotlin](https://img.shields.io/badge/kotlin-1.9%2B-007396?logo=kotlin)
 ![Android](https://img.shields.io/badge/Android-14%2B-3DDC84?logo=android)
-![Rust](https://img.shields.io/badge/rust-android%20cross-compile-000000?logo=rust)
-![License](https://img.shields.io/badge/license-MIT-blue)
 ![Backend](https://img.shields.io/badge/backend-ESP32--C5--BLE-orange)
 
 **physkey-android** 是把 **ESP32 变成 Android 系统级 FIDO2 硬件安全密钥** 的凭据提供者应用。
